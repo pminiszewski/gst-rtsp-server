@@ -15,6 +15,8 @@ examples = [
   'test-uri',
   'test-video',
   'test-video-rtx',
+  'test-playlist',
+  'test-playlist-client'
 ]
 
 foreach example : examples
