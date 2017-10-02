@@ -710,7 +710,11 @@ create_element (GstRTSPMediaFactory * factory, const GstRTSPUrl * url)
   res = g_object_new (TEST_TYPE_SEQUENCER, "folder", folder, NULL);
 
   /* Read stdin */
+#ifdef G_OS_WIN32
+  io = g_io_channel_win32_new_fd (_fileno (stdin));
+#else
   io = g_io_channel_unix_new (STDIN_FILENO);
+#endif
   g_io_add_watch (io, G_IO_IN, io_callback, res);
   g_io_channel_unref (io);
 
