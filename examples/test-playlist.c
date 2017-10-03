@@ -32,6 +32,16 @@
 
 static gchar *folder = NULL;
 
+#define CLIP_DESC \
+  "uridecodebin uri=%s expose-all-streams=false caps=audio/x-raw ! " \
+  "audioconvert ! audioresample"
+
+#define ENCODER "vorbisenc"
+
+#define PARSER "vorbisparse"
+
+#define PAYLOADER "rtpvorbispay"
+
 /* Audio clip */
 
 #define TEST_TYPE_CLIP (test_clip_get_type ())
@@ -145,49 +155,33 @@ test_clip_finalize (GObject * object)
 }
 
 static void
-pad_added_cb (TestClip * dec, GstPad * pad, GstElement * peer)
-{
-  GstPad *peer_sinkpad = gst_element_get_static_pad (peer, "sink");
-  gst_pad_link (pad, peer_sinkpad);
-  gst_object_unref (peer_sinkpad);
-
-  /* TODO: clip with multiple audio tracks ? */
-  g_signal_handlers_disconnect_by_func (dec, pad_added_cb, peer);
-}
-
-static void
 test_clip_constructed (GObject * object)
 {
   TestClip *self = TEST_CLIP (object);
-  GstElement *dec, *resample, *convert;
-  GstCaps *caps;
-  GstPad *resample_srcpad;
+  GstElement *decodebin;
+  gchar *bin_desc;
+  GError *error = NULL;
+  GstPad *decodebin_srcpad;
 
   g_assert (self->uri);
 
-  dec = gst_element_factory_make ("uridecodebin", NULL);
-  gst_bin_add (GST_BIN (self), dec);
-  caps = gst_caps_new_empty_simple ("audio/x-raw");
-  g_object_set (dec, "uri", self->uri, "expose-all-streams", FALSE, "caps",
-      caps, NULL);
-  gst_caps_unref (caps);
+  bin_desc = g_strdup_printf (CLIP_DESC, self->uri);
+  decodebin = gst_parse_bin_from_description (bin_desc, FALSE, &error);
+  g_free (bin_desc);
 
-  convert = gst_element_factory_make ("audioconvert", NULL);
-  gst_bin_add (GST_BIN (self), convert);
+  g_assert (!error);
 
-  resample = gst_element_factory_make ("audioresample", NULL);
-  gst_bin_add (GST_BIN (self), resample);
+  gst_bin_add (GST_BIN (self), decodebin);
 
-  gst_element_link (convert, resample);
-
-  resample_srcpad = gst_element_get_static_pad (resample, "src");
   self->srcpad =
-      gst_object_ref_sink (gst_ghost_pad_new ("src", resample_srcpad));
-  gst_object_unref (resample_srcpad);
+      gst_object_ref_sink (gst_ghost_pad_new_no_target ("src", GST_PAD_SRC));
   gst_pad_set_active (self->srcpad, TRUE);
   gst_element_add_pad (GST_ELEMENT (self), self->srcpad);
 
-  g_signal_connect (dec, "pad-added", G_CALLBACK (pad_added_cb), convert);
+  decodebin_srcpad = gst_bin_find_unlinked_pad (GST_BIN (decodebin), GST_PAD_SRC);
+  g_assert (decodebin_srcpad);
+  gst_ghost_pad_set_target (GST_GHOST_PAD (self->srcpad), decodebin_srcpad);
+  gst_object_unref (decodebin_srcpad);
 
   gst_pad_add_probe (self->srcpad,
       GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM,
@@ -494,10 +488,10 @@ test_sequencer_constructed (GObject * object)
   self->concat = gst_element_factory_make ("concat", NULL);
   gst_bin_add (GST_BIN (self), self->concat);
 
-  enc = gst_element_factory_make ("opusenc", NULL);
+  enc = gst_element_factory_make (ENCODER, NULL);
   gst_bin_add (GST_BIN (self), enc);
 
-  parse = gst_element_factory_make ("opusparse", NULL);
+  parse = gst_element_factory_make (PARSER, NULL);
   gst_bin_add (GST_BIN (self), parse);
 
   g_assert (gst_element_link_many (src, conv, resample, NULL));
@@ -541,7 +535,7 @@ static void
 test_sequencer_init (TestSequencer * self)
 {
   /* RtspMedia looks for an element named pay0, a bit clunky but it works */
-  self->payloader = gst_element_factory_make ("rtpopuspay", "pay0");
+  self->payloader = gst_element_factory_make (PAYLOADER, "pay0");
   self->pads_to_release = g_queue_new();
   self->clips_to_remove = g_queue_new();
   gst_bin_add (GST_BIN (self), self->payloader);
@@ -792,8 +786,8 @@ sanity_check (void)
 {
   gboolean ret = TRUE;
 
-  if (!check_elements_exist ("rtpopuspay", "audiotestsrc", "audioconvert",
-          "audioresample", "audiomixer", "concat", "opusenc", "opusparse",
+  if (!check_elements_exist (PAYLOADER, "audiotestsrc", "audioconvert",
+          "audioresample", "audiomixer", "concat", ENCODER, PARSER,
           NULL)) {
     g_print ("Sanity checks failed\n");
     ret = FALSE;
