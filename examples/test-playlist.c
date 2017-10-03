@@ -705,21 +705,8 @@ static GstElement *
 create_element (GstRTSPMediaFactory * factory, const GstRTSPUrl * url)
 {
   GstElement *res;
-  GIOChannel *io = NULL;
 
   res = g_object_new (TEST_TYPE_SEQUENCER, "folder", folder, NULL);
-
-  /* Read stdin */
-#ifdef G_OS_WIN32
-  io = g_io_channel_win32_new_fd (_fileno (stdin));
-#else
-  io = g_io_channel_unix_new (STDIN_FILENO);
-#endif
-  g_io_add_watch (io, G_IO_IN, io_callback, res);
-  g_io_channel_unref (io);
-
-  g_print ("Type help to list commands\n");
-  g_print ("$ ");
 
   return GST_ELEMENT (res);
 }
@@ -734,6 +721,44 @@ test_rtsp_media_factory_class_init (TestRTSPMediaFactoryClass * test_klass)
 static void
 test_rtsp_media_factory_init (TestRTSPMediaFactory * self)
 {
+}
+
+static void
+media_unprepared_cb (GstRTSPMedia *media, gpointer udata)
+{
+  guint watch_id = GPOINTER_TO_UINT (udata);
+  g_source_remove (watch_id);
+  g_print ("Session closed\n");
+}
+
+static void
+media_prepared_cb (GstRTSPMedia *media, gpointer udata)
+{
+  TestSequencer *seq = TEST_SEQUENCER (gst_rtsp_media_get_element (media));
+  GIOChannel *io;
+  guint watch_id;
+
+  /* Read stdin */
+#ifdef G_OS_WIN32
+  io = g_io_channel_win32_new_fd (_fileno (stdin));
+#else
+  io = g_io_channel_unix_new (STDIN_FILENO);
+#endif
+
+  watch_id = g_io_add_watch (io, G_IO_IN, io_callback, seq);
+  g_io_channel_unref (io);
+  gst_object_unref (seq);
+
+  g_print ("Session opened, type help to list commands\n");
+  g_print ("$ ");
+
+  g_signal_connect (media, "unprepared", G_CALLBACK (media_unprepared_cb), GUINT_TO_POINTER (watch_id));
+}
+
+static void
+media_constructed_cb (GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer udata)
+{
+  g_signal_connect (media, "prepared", G_CALLBACK (media_prepared_cb), NULL);
 }
 
 static gboolean
@@ -806,6 +831,7 @@ main (int argc, char *argv[])
   mounts = gst_rtsp_server_get_mount_points (server);
   factory = g_object_new (TEST_TYPE_RTSP_MEDIA_FACTORY, NULL);
   gst_rtsp_media_factory_set_shared (factory, TRUE);
+  g_signal_connect (factory, "media-constructed", G_CALLBACK (media_constructed_cb), NULL);
   gst_rtsp_mount_points_add_factory (mounts, "/test", factory);
   g_object_unref (mounts);
   gst_rtsp_server_attach (server, NULL);
