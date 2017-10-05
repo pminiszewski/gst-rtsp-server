@@ -34,13 +34,13 @@ static gchar *folder = NULL;
 
 #define CLIP_DESC \
 "uridecodebin uri=%s expose-all-streams=false caps=audio/x-raw ! " \
-"audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1,format=F32LE !  tee name=d interleave name=i " \
-"d.src_0 ! queue !  audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1 ! audioconvert ! audioresample ! queue ! i.sink_0 " \
-"d.src_1 ! queue !  audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1 ! audioconvert ! audioresample ! queue ! i.sink_1 " \
-"d.src_2 ! queue !  audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1 ! audioconvert ! audioresample ! queue ! i.sink_2 " \
-"d.src_3 ! queue !  audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1 ! audioconvert ! audioresample ! queue ! i.sink_3 " \
-"d.src_4 ! queue !  audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1 ! audioconvert ! audioresample ! queue ! i.sink_4 " \
-"i.src ! queue ! audioconvert ! audioresample "
+"audioconvert ! audio/x-raw,channels=1 ! tee name=t interleave name=i " \
+"t.src_0 ! queue ! audioconvert ! i.sink_0 " \
+"t.src_1 ! queue ! audioconvert ! i.sink_1 " \
+"t.src_2 ! queue ! audioconvert ! i.sink_2 " \
+"t.src_3 ! queue ! audioconvert ! i.sink_3 " \
+"t.src_4 ! queue ! audioconvert ! i.sink_4 " \
+"i.src ! capssetter caps=\"audio/x-raw, channels=5, channel-mask=(bitmask)0x37\" ! audioconvert ! audioresample "
 
 #define ENCODER "opusenc"
 
