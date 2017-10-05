@@ -33,16 +33,22 @@
 static gchar *folder = NULL;
 
 #define CLIP_DESC \
-  "uridecodebin uri=%s expose-all-streams=false caps=audio/x-raw ! " \
-  "audioconvert ! audioresample"
+"uridecodebin uri=%s expose-all-streams=false caps=audio/x-raw ! " \
+"audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1,format=F32LE !  tee name=d interleave name=i " \
+"d.src_0 ! queue !  audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1 ! audioconvert ! audioresample ! queue ! i.sink_0 " \
+"d.src_1 ! queue !  audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1 ! audioconvert ! audioresample ! queue ! i.sink_1 " \
+"d.src_2 ! queue !  audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1 ! audioconvert ! audioresample ! queue ! i.sink_2 " \
+"d.src_3 ! queue !  audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1 ! audioconvert ! audioresample ! queue ! i.sink_3 " \
+"d.src_4 ! queue !  audioconvert ! audioresample ! audio/x-raw,rate=44100,channels=1 ! audioconvert ! audioresample ! queue ! i.sink_4 " \
+"i.src ! queue ! audioconvert ! audioresample "
 
-#define ENCODER "vorbisenc"
+#define ENCODER "opusenc"
 
-#define PARSER "vorbisparse"
+#define PARSER "opusparse"
 
-#define PAYLOADER "rtpvorbispay"
+#define PAYLOADER "rtpgstpay"
 
-#define OUTPUT_CAPS "audio/x-raw, channels=2"
+#define OUTPUT_CAPS "audio/x-raw, channels=5"
 
 /* Audio clip */
 
