@@ -42,6 +42,8 @@ static gchar *folder = NULL;
 
 #define PAYLOADER "rtpvorbispay"
 
+#define OUTPUT_CAPS "audio/x-raw, channels=2"
+
 /* Audio clip */
 
 #define TEST_TYPE_CLIP (test_clip_get_type ())
@@ -469,8 +471,9 @@ static void
 test_sequencer_constructed (GObject * object)
 {
   TestSequencer *self = TEST_SEQUENCER (object);
-  GstElement *enc, *parse, *src, *conv, *resample;
+  GstElement *enc, *parse, *src, *conv, *resample, *capsfilter;
   GstPad *mixer_sinkpad, *resample_srcpad;
+  GstCaps *output_caps;
 
   src = gst_element_factory_make ("audiotestsrc", NULL);
   g_object_set (src, "is-live", TRUE, "volume", 0, NULL);
@@ -484,6 +487,12 @@ test_sequencer_constructed (GObject * object)
 
   self->mixer = gst_element_factory_make ("audiomixer", NULL);
   gst_bin_add (GST_BIN (self), self->mixer);
+
+  capsfilter = gst_element_factory_make ("capsfilter", NULL);
+  gst_bin_add (GST_BIN (self), capsfilter);
+  output_caps = gst_caps_from_string (OUTPUT_CAPS);
+  g_object_set (capsfilter, "caps", output_caps, NULL);
+  gst_caps_unref (output_caps);
 
   self->concat = gst_element_factory_make ("concat", NULL);
   gst_bin_add (GST_BIN (self), self->concat);
@@ -509,7 +518,7 @@ test_sequencer_constructed (GObject * object)
   gst_object_unref (self->concat_srcpad);
   gst_object_unref (self->songs_pad);
 
-  gst_element_link (self->mixer, enc);
+  gst_element_link_many (self->mixer, capsfilter, enc, NULL);
 
   gst_bin_sync_children_states (GST_BIN (self));
 
