@@ -33,22 +33,24 @@
 static gchar *folder = NULL;
 
 #define CLIP_DESC \
-"uridecodebin uri=%s expose-all-streams=false caps=audio/x-raw ! " \
-"audioconvert ! audio/x-raw,channels=1 ! tee name=t interleave name=i " \
-"t.src_0 ! queue ! audioconvert ! i.sink_0 " \
-"t.src_1 ! queue ! audioconvert ! i.sink_1 " \
-"t.src_2 ! queue ! audioconvert ! i.sink_2 " \
-"t.src_3 ! queue ! audioconvert ! i.sink_3 " \
-"t.src_4 ! queue ! audioconvert ! i.sink_4 " \
-"i.src ! capssetter caps=\"audio/x-raw, channels=5, channel-mask=(bitmask)0x37\" ! audioconvert ! audioresample "
+"uridecodebin uri=%s expose-all-streams=false caps=audio/x-raw name=d interleave name=i " \
+"d.src_0 ! queue ! audioconvert ! deinterleave name=s " \
+"s.src_0 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_0 " \
+"s.src_1 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_1 " \
+"d.src_1 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_2 " \
+"d.src_2 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_3 " \
+"d.src_3 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_4 " \
+"d.src_4 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_5 " \
+"i.src ! capssetter caps=\"audio/x-raw, channels=6, channel-mask=(bitmask)0x3f\" ! audioconvert ! audioresample ! audio/x-raw, rate=48000, format=S16LE ! audioconvert ! audioresample ! " \
+"capssetter caps=\"audio/x-raw,channels=6,channel-mask=(bitmask)0x0,layout=interleaved,format=S16LE,rate=48000\""
 
-#define ENCODER "opusenc"
+#define ENCODER "opusenc bitrate=192000"
 
 #define PARSER "opusparse"
 
 #define PAYLOADER "rtpgstpay"
 
-#define OUTPUT_CAPS "audio/x-raw, channels=5"
+#define OUTPUT_CAPS "audio/x-raw,channels=6,channel-mask=(bitmask)0x0,layout=interleaved,format=S16LE,rate=48000"
 
 /* Audio clip */
 
@@ -480,6 +482,7 @@ test_sequencer_constructed (GObject * object)
   GstElement *enc, *parse, *src, *conv, *resample, *capsfilter;
   GstPad *mixer_sinkpad, *resample_srcpad;
   GstCaps *output_caps;
+  GError *error = NULL;
 
   src = gst_element_factory_make ("audiotestsrc", NULL);
   g_object_set (src, "is-live", TRUE, "volume", 0, NULL);
@@ -503,10 +506,16 @@ test_sequencer_constructed (GObject * object)
   self->concat = gst_element_factory_make ("concat", NULL);
   gst_bin_add (GST_BIN (self), self->concat);
 
-  enc = gst_element_factory_make (ENCODER, NULL);
+  enc = gst_parse_bin_from_description_full (ENCODER, FALSE, NULL,
+      GST_PARSE_FLAG_NO_SINGLE_ELEMENT_BINS, &error);
+  g_assert_no_error (error);
+  g_assert_false (GST_IS_BIN (enc));
   gst_bin_add (GST_BIN (self), enc);
 
-  parse = gst_element_factory_make (PARSER, NULL);
+  parse = gst_parse_bin_from_description_full (PARSER, FALSE, NULL,
+      GST_PARSE_FLAG_NO_SINGLE_ELEMENT_BINS, &error);
+  g_assert_no_error (error);
+  g_assert_false (GST_IS_BIN (parse));
   gst_bin_add (GST_BIN (self), parse);
 
   g_assert (gst_element_link_many (src, conv, resample, NULL));
@@ -549,8 +558,14 @@ test_sequencer_class_init (TestSequencerClass * test_klass)
 static void
 test_sequencer_init (TestSequencer * self)
 {
+  GError *error = NULL;
+
   /* RtspMedia looks for an element named pay0, a bit clunky but it works */
-  self->payloader = gst_element_factory_make (PAYLOADER, "pay0");
+  self->payloader = gst_parse_bin_from_description_full (PAYLOADER, FALSE,
+      NULL, GST_PARSE_FLAG_NO_SINGLE_ELEMENT_BINS, &error);
+  g_assert_no_error (error);
+  g_assert_false (GST_IS_BIN (self->payloader));
+  gst_element_set_name (self->payloader, "pay0");
   self->pads_to_release = g_queue_new();
   self->clips_to_remove = g_queue_new();
   gst_bin_add (GST_BIN (self), self->payloader);
@@ -577,6 +592,7 @@ test_sequencer_previous (TestSequencer * self)
 static void
 test_sequencer_next (TestSequencer * self)
 {
+  GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN (self), GST_DEBUG_GRAPH_SHOW_ALL, "next");
   test_sequencer_next_uri (self);
   print_current (self);
   test_clip_stop (self->current_clip);
@@ -801,9 +817,8 @@ sanity_check (void)
 {
   gboolean ret = TRUE;
 
-  if (!check_elements_exist (PAYLOADER, "audiotestsrc", "audioconvert",
-          "audioresample", "audiomixer", "concat", ENCODER, PARSER,
-          NULL)) {
+  if (!check_elements_exist ("audiotestsrc", "audioconvert",
+          "audioresample", "audiomixer", "concat", NULL)) {
     g_print ("Sanity checks failed\n");
     ret = FALSE;
     goto done;
