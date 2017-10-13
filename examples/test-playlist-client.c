@@ -22,6 +22,9 @@
 
 #include <gst/gst.h>
 
+/* This value is only suitable for local networks with no congestion */
+#define LATENCY 40
+
 static gboolean
 message (GstBus * bus, GstMessage * message, gpointer user_data)
 {
@@ -73,6 +76,12 @@ message (GstBus * bus, GstMessage * message, gpointer user_data)
   return TRUE;
 }
 
+static void
+source_setup_cb (GstElement *playbin, GstElement *source, gpointer unused)
+{
+  g_object_set (source, "latency", LATENCY, NULL);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -91,6 +100,7 @@ main (int argc, char *argv[])
   loop = g_main_loop_new (NULL, FALSE);
 
   pipe = gst_element_factory_make ("playbin", NULL);
+  g_signal_connect (pipe, "source-setup", G_CALLBACK (source_setup_cb), NULL);
   g_object_set (pipe, "uri", argv[1], NULL);
 
   if (gst_element_set_state (pipe,
