@@ -57,6 +57,10 @@ gstapp_dep = dependency('gstreamer-app-1.0', version : gst_req,
 gstnet_dep = dependency('gstreamer-net-1.0', version : gst_req,
   fallback : ['gstreamer', 'gst_net_dep'])
 
+gstaudio_dep = dependency('gstreamer-audio-1.0', version : gst_req,
+  fallback : ['gst-plugins-base', 'gst_audio_dep'])
+rpmeta_dep = dependency('rpmeta', fallback: ['gst-redpill', 'rpmeta_dep'])
+
 vs_module_defs_dir = meson.current_source_dir() + '/win32/common/'
 
 gir = find_program('g-ir-scanner', required : false)

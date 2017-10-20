@@ -29,28 +29,23 @@
 #include <glib/gstdio.h>
 #include <gst/gst.h>
 #include <gst/rtsp-server/rtsp-server.h>
+#include <rpmeta.h>
 
 static gchar *folder = NULL;
 
 #define CLIP_DESC \
-"uridecodebin uri=%s expose-all-streams=false caps=audio/x-raw name=d interleave name=i " \
-"d.src_0 ! queue ! audioconvert ! deinterleave name=s " \
-"s.src_0 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_0 " \
-"s.src_1 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_1 " \
-"d.src_1 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_2 " \
-"d.src_2 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_3 " \
-"d.src_3 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_4 " \
-"d.src_4 ! queue ! audioconvert ! audioresample ! audio/x-raw,channels=1 ! i.sink_5 " \
-"i.src ! capssetter caps=\"audio/x-raw, channels=6, channel-mask=(bitmask)0x3f\" ! audioconvert ! audioresample ! audio/x-raw, rate=48000, format=S16LE ! audioconvert ! audioresample ! " \
-"capssetter caps=\"audio/x-raw,channels=6,channel-mask=(bitmask)0x0,layout=interleaved,format=S16LE,rate=48000\""
+"uridecodebin uri=%s expose-all-streams=false caps=audio/x-raw ! audioconvert ! audioresample"
 
-#define ENCODER "opusenc bitrate=192000"
+#define ENCODER "opusenc bitrate=192000 send-samples-events=true"
 
 #define PARSER "opusparse"
 
 #define PAYLOADER "rtpgstpay"
 
-#define OUTPUT_CAPS "audio/x-raw,channels=6,channel-mask=(bitmask)0x0,layout=interleaved,format=S16LE,rate=48000"
+#define OUTPUT_CAPS "audio/x-raw,channels=2,rate=48000"
+
+#define N_CHANNELS 2
+#define FRAMES_PER_BLOCK 512
 
 /* Audio clip */
 
@@ -249,7 +244,7 @@ struct _TestSequencer
   GstBin parent;
   gchar *folder;
   GstElement *concat;
-  GstElement *payloader;
+  GstElement *meta_payloader;
   GstElement *mixer;
   GstPad *songs_pad;
   GList *uris;
@@ -260,6 +255,9 @@ struct _TestSequencer
   GQueue *pads_to_release;
   GQueue *clips_to_remove;
   TestClip *current_clip;
+
+  guint8 test_data;
+  guint64 sample_offset;
 };
 
 G_DEFINE_TYPE (TestSequencer, test_sequencer, GST_TYPE_BIN);
@@ -475,12 +473,23 @@ done:
   return ret;
 }
 
+GstPadProbeReturn
+add_meta_cb (GstPad *pad, GstPadProbeInfo *info, gpointer udata)
+{
+  TestSequencer *self = TEST_SEQUENCER (udata);
+  GstBuffer *buffer = gst_buffer_make_writable (info->data);
+  gst_buffer_add_rp_meta (buffer, self->test_data, self->sample_offset);
+  self->test_data += 1;
+  self->sample_offset += FRAMES_PER_BLOCK * N_CHANNELS;
+  return GST_PAD_PROBE_OK;
+}
+
 static void
 test_sequencer_constructed (GObject * object)
 {
   TestSequencer *self = TEST_SEQUENCER (object);
-  GstElement *enc, *parse, *src, *conv, *resample, *capsfilter;
-  GstPad *mixer_sinkpad, *resample_srcpad;
+  GstElement *enc, *parse, *src, *conv, *resample, *capsfilter, *payloader, *asplit;
+  GstPad *mixer_sinkpad, *resample_srcpad, *asplit_srcpad;
   GstCaps *output_caps;
   GError *error = NULL;
 
@@ -496,6 +505,13 @@ test_sequencer_constructed (GObject * object)
 
   self->mixer = gst_element_factory_make ("audiomixer", NULL);
   gst_bin_add (GST_BIN (self), self->mixer);
+
+  asplit = gst_element_factory_make ("audiobuffersplit", NULL);
+  gst_util_set_object_arg (G_OBJECT(asplit), "output-buffer-duration", "512/48000");
+  gst_bin_add (GST_BIN (self), asplit);
+  asplit_srcpad = gst_element_get_static_pad (asplit, "src");
+  gst_pad_add_probe (asplit_srcpad, GST_PAD_PROBE_TYPE_BUFFER, add_meta_cb, self, NULL);
+  gst_object_unref (asplit_srcpad);
 
   capsfilter = gst_element_factory_make ("capsfilter", NULL);
   gst_bin_add (GST_BIN (self), capsfilter);
@@ -518,8 +534,14 @@ test_sequencer_constructed (GObject * object)
   g_assert_false (GST_IS_BIN (parse));
   gst_bin_add (GST_BIN (self), parse);
 
+  payloader = gst_parse_bin_from_description_full (PAYLOADER, FALSE,
+      NULL, GST_PARSE_FLAG_NO_SINGLE_ELEMENT_BINS, &error);
+  g_assert_no_error (error);
+  g_assert_false (GST_IS_BIN (payloader));
+  gst_bin_add (GST_BIN (self), payloader);
+
   g_assert (gst_element_link_many (src, conv, resample, NULL));
-  g_assert (gst_element_link_many (enc, parse, self->payloader, NULL));
+  g_assert (gst_element_link_many (enc, parse, payloader, self->meta_payloader, NULL));
 
   resample_srcpad = gst_element_get_static_pad (resample, "src");
   mixer_sinkpad = gst_element_get_request_pad (self->mixer, "sink_%u");
@@ -533,10 +555,9 @@ test_sequencer_constructed (GObject * object)
   gst_object_unref (self->concat_srcpad);
   gst_object_unref (self->songs_pad);
 
-  gst_element_link_many (self->mixer, capsfilter, enc, NULL);
+  gst_element_link_many (self->mixer, asplit, capsfilter, enc, NULL);
 
   gst_bin_sync_children_states (GST_BIN (self));
-
 }
 
 static void
@@ -558,17 +579,11 @@ test_sequencer_class_init (TestSequencerClass * test_klass)
 static void
 test_sequencer_init (TestSequencer * self)
 {
-  GError *error = NULL;
+  self->meta_payloader = gst_element_factory_make ("rppay", "pay0");
+  gst_bin_add (GST_BIN (self), self->meta_payloader);
 
-  /* RtspMedia looks for an element named pay0, a bit clunky but it works */
-  self->payloader = gst_parse_bin_from_description_full (PAYLOADER, FALSE,
-      NULL, GST_PARSE_FLAG_NO_SINGLE_ELEMENT_BINS, &error);
-  g_assert_no_error (error);
-  g_assert_false (GST_IS_BIN (self->payloader));
-  gst_element_set_name (self->payloader, "pay0");
   self->pads_to_release = g_queue_new();
   self->clips_to_remove = g_queue_new();
-  gst_bin_add (GST_BIN (self), self->payloader);
 }
 
 static void
@@ -818,7 +833,7 @@ sanity_check (void)
   gboolean ret = TRUE;
 
   if (!check_elements_exist ("audiotestsrc", "audioconvert",
-          "audioresample", "audiomixer", "concat", NULL)) {
+          "audioresample", "audiomixer", "concat", "rppay")) {
     g_print ("Sanity checks failed\n");
     ret = FALSE;
     goto done;
