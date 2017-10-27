@@ -106,6 +106,8 @@ parse_meta_cb (GstPad *pad, GstPadProbeInfo *info, gpointer udata)
 {
   ProbeData *pdata = (ProbeData *) udata;
 
+  GST_DEBUG ("parsing meta, received %" GST_PTR_FORMAT, info->data);
+
   if (GST_AUDIO_INFO_IS_VALID (&pdata->ainfo) &&
       (info->type & GST_PAD_PROBE_TYPE_BUFFER) &&
       pdata->received_samples_event) {
@@ -133,6 +135,8 @@ parse_meta_cb (GstPad *pad, GstPadProbeInfo *info, gpointer udata)
       guint64 overlap_start = MAX (buffer_start, block_start);
       guint64 overlap_end = MIN (buffer_end, block_end);
 
+      GST_DEBUG ("parsing meta with offset %" G_GUINT64_FORMAT, rmeta->offset);
+
       if (overlap_start < overlap_end)
         g_print ("\t%" G_GUINT64_FORMAT " samples with data %02x\n",
             overlap_end - overlap_start, rmeta->data);
@@ -153,7 +157,6 @@ parse_meta_cb (GstPad *pad, GstPadProbeInfo *info, gpointer udata)
           GST_AUDIO_INFO_IS_VALID (&pdata->ainfo)) {
         gst_structure_get_uint64 (s, "processed", &pdata->sample_offset);
         pdata->sample_offset *= pdata->ainfo.channels;
-        GST_ERROR ("Got it though, %lu", pdata->sample_offset);
         pdata->received_samples_event = TRUE;
       }
     }
