@@ -25,7 +25,11 @@
 #include <gst/sdp/gstsdpmessage.h>
 #include <gio/gio.h>
 #include <string.h>
+#ifdef G_OS_WIN32
+#include <Winsock2.h>
+#else
 #include <sys/socket.h>
+#endif
 #include <rpmeta.h>
 
 /* This value is only suitable for local networks with no congestion */
@@ -189,22 +193,12 @@ recv_sap (Context * ctx, gchar ** sdp, gboolean * goodbye)
 {
   GInputVector iovec;
   gssize len;
-  gint flags = MSG_PEEK | MSG_TRUNC;
   guint32 header;
   guint six, ac, k;
   gchar *e;
 
-  iovec.buffer = NULL;
-  iovec.size = 0;
-  len =
-      g_socket_receive_message (ctx->sock, NULL, &iovec, 1, NULL, NULL, &flags,
-      NULL, NULL);
-
-  if (len < 0)
-    goto done;
-
-  iovec.buffer = g_malloc (len * sizeof (gchar));
-  iovec.size = len;
+  iovec.buffer = g_malloc (4096 * sizeof (gchar));
+  iovec.size = 4096;
   len =
       g_socket_receive_message (ctx->sock, NULL, &iovec, 1, NULL, NULL, NULL,
       NULL, NULL);
@@ -234,7 +228,7 @@ recv_sap (Context * ctx, gchar ** sdp, gboolean * goodbye)
   if ((guint) len < k)
     goto fail;
 
-  e = iovec.buffer + k;
+  e = (guint8 *) iovec.buffer + k;
   len -= (gint) k;
 
   if ((guint) len >= sizeof (MIME_TYPE) && !strcmp (e, MIME_TYPE)) {
@@ -311,9 +305,8 @@ sap_cb (GIOChannel * io, GIOCondition condition, gpointer udata)
   if (ctx->pipe)
     return TRUE;
 
-  if (recv_sap (ctx, &sdp, &goodbye) < 0) {
+  if (recv_sap (ctx, &sdp, &goodbye) < 0)
     goto done;
-  }
 
   ret = TRUE;
 
@@ -350,12 +343,15 @@ free_context (Context * ctx)
 static Context *
 listen_to_announcements (const gchar * session_name, GError ** err)
 {
-  GSocketAddress *address;
+  GSocketAddress *address, *local_address;
   GIOChannel *chan;
   Context *res = g_new0 (Context, 1);
 
   address =
       g_inet_socket_address_new_from_string (DEFAULT_SAP_ADDRESS,
+      DEFAULT_SAP_PORT);
+  local_address =
+      g_inet_socket_address_new_from_string ("0.0.0.0",
       DEFAULT_SAP_PORT);
 
   res->session_name = g_strdup (session_name);
@@ -364,19 +360,24 @@ listen_to_announcements (const gchar * session_name, GError ** err)
           g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_DATAGRAM,
               G_SOCKET_PROTOCOL_UDP, err)))
     goto fail;
-  if (!g_socket_bind (res->sock, address, TRUE, err))
+  if (!g_socket_bind (res->sock, local_address, TRUE, err))
     goto fail;
   if (!g_socket_join_multicast_group (res->sock,
           g_inet_socket_address_get_address ((GInetSocketAddress *) address),
           FALSE, NULL, err))
     goto fail;
-
+#ifdef G_OS_WIN32
+  chan = g_io_channel_win32_new_socket (g_socket_get_fd (res->sock));
+#else
   chan = g_io_channel_unix_new (g_socket_get_fd (res->sock));
+#endif
+
   res->watch_id = g_io_add_watch (chan, G_IO_IN, sap_cb, res);
   g_io_channel_unref (chan);
 
 done:
   g_object_unref (address);
+  g_object_unref (local_address);
   return res;
 
 fail:

@@ -849,7 +849,7 @@ sanity_check (void)
   gboolean ret = TRUE;
 
   if (!check_elements_exist ("audiotestsrc", "audioconvert",
-          "audioresample", "audiomixer", "concat", "rppay")) {
+          "audioresample", "audiomixer", "concat", "rppay", NULL)) {
     g_print ("Sanity checks failed\n");
     ret = FALSE;
     goto done;
