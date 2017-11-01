@@ -29,6 +29,8 @@
 #include <glib/gstdio.h>
 #include <gst/gst.h>
 #include <gst/rtsp-server/rtsp-server.h>
+#include <gst/sdp/gstsdpmessage.h>
+#include <string.h>
 #include <rpmeta.h>
 
 static gchar *folder = NULL;
@@ -46,6 +48,11 @@ static gchar *folder = NULL;
 
 #define N_CHANNELS 2
 #define FRAMES_PER_BLOCK 512
+
+#define DEFAULT_SAP_ADDRESS "224.0.0.56"
+#define DEFAULT_SAP_PORT 9875
+#define SAP_INTERVAL_SECONDS 1
+#define MIME_TYPE "application/sdp"
 
 /* Audio clip */
 
@@ -183,7 +190,8 @@ test_clip_constructed (GObject * object)
   gst_pad_set_active (self->srcpad, TRUE);
   gst_element_add_pad (GST_ELEMENT (self), self->srcpad);
 
-  decodebin_srcpad = gst_bin_find_unlinked_pad (GST_BIN (decodebin), GST_PAD_SRC);
+  decodebin_srcpad =
+      gst_bin_find_unlinked_pad (GST_BIN (decodebin), GST_PAD_SRC);
   g_assert (decodebin_srcpad);
   gst_ghost_pad_set_target (GST_GHOST_PAD (self->srcpad), decodebin_srcpad);
   gst_object_unref (decodebin_srcpad);
@@ -421,13 +429,15 @@ queue_uri (TestSequencer * self)
   self->current_clip = g_object_new (TEST_TYPE_CLIP, "uri", uri, NULL);
   gst_bin_add (GST_BIN (self), GST_ELEMENT (self->current_clip));
 
-  clip_srcpad = gst_element_get_static_pad (GST_ELEMENT (self->current_clip), "src");
+  clip_srcpad =
+      gst_element_get_static_pad (GST_ELEMENT (self->current_clip), "src");
   concat_sinkpad = gst_element_get_request_pad (self->concat, "sink_%u");
   gst_pad_link (clip_srcpad, concat_sinkpad);
   gst_object_unref (concat_sinkpad);
   gst_object_unref (clip_srcpad);
 
-  g_signal_connect (self->current_clip, "done", G_CALLBACK (clip_done_cb), self);
+  g_signal_connect (self->current_clip, "done", G_CALLBACK (clip_done_cb),
+      self);
 
   gst_element_sync_state_with_parent (GST_ELEMENT (self->current_clip));
 }
@@ -474,7 +484,7 @@ done:
 }
 
 GstPadProbeReturn
-add_meta_cb (GstPad *pad, GstPadProbeInfo *info, gpointer udata)
+add_meta_cb (GstPad * pad, GstPadProbeInfo * info, gpointer udata)
 {
   TestSequencer *self = TEST_SEQUENCER (udata);
   GstBuffer *buffer = gst_buffer_make_writable (info->data);
@@ -488,7 +498,8 @@ static void
 test_sequencer_constructed (GObject * object)
 {
   TestSequencer *self = TEST_SEQUENCER (object);
-  GstElement *enc, *parse, *src, *conv, *resample, *capsfilter, *payloader, *asplit;
+  GstElement *enc, *parse, *src, *conv, *resample, *capsfilter, *payloader,
+      *asplit;
   GstPad *mixer_sinkpad, *resample_srcpad, *asplit_srcpad;
   GstCaps *output_caps;
   GError *error = NULL;
@@ -507,10 +518,12 @@ test_sequencer_constructed (GObject * object)
   gst_bin_add (GST_BIN (self), self->mixer);
 
   asplit = gst_element_factory_make ("audiobuffersplit", NULL);
-  gst_util_set_object_arg (G_OBJECT(asplit), "output-buffer-duration", "512/48000");
+  gst_util_set_object_arg (G_OBJECT (asplit), "output-buffer-duration",
+      "512/48000");
   gst_bin_add (GST_BIN (self), asplit);
   asplit_srcpad = gst_element_get_static_pad (asplit, "src");
-  gst_pad_add_probe (asplit_srcpad, GST_PAD_PROBE_TYPE_BUFFER, add_meta_cb, self, NULL);
+  gst_pad_add_probe (asplit_srcpad, GST_PAD_PROBE_TYPE_BUFFER, add_meta_cb,
+      self, NULL);
   gst_object_unref (asplit_srcpad);
 
   capsfilter = gst_element_factory_make ("capsfilter", NULL);
@@ -541,7 +554,8 @@ test_sequencer_constructed (GObject * object)
   gst_bin_add (GST_BIN (self), payloader);
 
   g_assert (gst_element_link_many (src, conv, resample, NULL));
-  g_assert (gst_element_link_many (enc, parse, payloader, self->meta_payloader, NULL));
+  g_assert (gst_element_link_many (enc, parse, payloader, self->meta_payloader,
+          NULL));
 
   resample_srcpad = gst_element_get_static_pad (resample, "src");
   mixer_sinkpad = gst_element_get_request_pad (self->mixer, "sink_%u");
@@ -582,8 +596,8 @@ test_sequencer_init (TestSequencer * self)
   self->meta_payloader = gst_element_factory_make ("rppay", "pay0");
   gst_bin_add (GST_BIN (self), self->meta_payloader);
 
-  self->pads_to_release = g_queue_new();
-  self->clips_to_remove = g_queue_new();
+  self->pads_to_release = g_queue_new ();
+  self->clips_to_remove = g_queue_new ();
 }
 
 static void
@@ -764,7 +778,7 @@ test_rtsp_media_factory_init (TestRTSPMediaFactory * self)
 }
 
 static void
-media_unprepared_cb (GstRTSPMedia *media, gpointer udata)
+media_unprepared_cb (GstRTSPMedia * media, gpointer udata)
 {
   guint watch_id = GPOINTER_TO_UINT (udata);
   g_source_remove (watch_id);
@@ -772,7 +786,7 @@ media_unprepared_cb (GstRTSPMedia *media, gpointer udata)
 }
 
 static void
-media_prepared_cb (GstRTSPMedia *media, gpointer udata)
+media_prepared_cb (GstRTSPMedia * media, gpointer udata)
 {
   TestSequencer *seq = TEST_SEQUENCER (gst_rtsp_media_get_element (media));
   GIOChannel *io;
@@ -792,11 +806,13 @@ media_prepared_cb (GstRTSPMedia *media, gpointer udata)
   g_print ("Session opened, type help to list commands\n");
   g_print ("$ ");
 
-  g_signal_connect (media, "unprepared", G_CALLBACK (media_unprepared_cb), GUINT_TO_POINTER (watch_id));
+  g_signal_connect (media, "unprepared", G_CALLBACK (media_unprepared_cb),
+      GUINT_TO_POINTER (watch_id));
 }
 
 static void
-media_constructed_cb (GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer udata)
+media_constructed_cb (GstRTSPMediaFactory * factory, GstRTSPMedia * media,
+    gpointer udata)
 {
   g_signal_connect (media, "prepared", G_CALLBACK (media_prepared_cb), NULL);
 }
@@ -843,6 +859,157 @@ done:
   return ret;
 }
 
+typedef struct
+{
+  GSocket *sock;
+  GPtrArray *sdps;
+  guint16 msg_id_hash;
+} SapData;
+
+int
+send_sap (GSocket * sock, gchar * sdp, guint16 msg_id_hash, gboolean goodbye)
+{
+  guint32 header;
+  GOutputVector iov[4];
+  GSocketAddress *saddr = g_socket_get_local_address (sock, NULL);
+  GInetAddress *iaddr =
+      g_inet_socket_address_get_address ((GInetSocketAddress *) saddr);
+
+  header = g_htonl (((guint32) 1 << 29) |
+      (goodbye ? (guint32) 1 << 26 : 0) | (msg_id_hash));
+
+  iov[0].buffer = &header;
+  iov[0].size = sizeof (header);
+
+  iov[1].buffer = (void *) g_inet_address_to_bytes (iaddr);
+  iov[1].size = 4;
+
+  iov[2].buffer = (char *) MIME_TYPE;
+  iov[2].size = sizeof (MIME_TYPE);
+
+  iov[3].buffer = sdp;
+  iov[3].size = strlen (sdp);
+
+  g_object_unref (saddr);
+
+  return g_socket_send_message (sock, NULL, iov, 4, NULL, 0, 0, NULL, NULL);
+}
+
+static gboolean
+send_sap_cb (SapData * sap_data)
+{
+  guint i;
+
+  for (i = 0; i < sap_data->sdps->len; i++) {
+    send_sap (sap_data->sock, g_ptr_array_index (sap_data->sdps, i),
+        sap_data->msg_id_hash, FALSE);
+  }
+
+  return G_SOURCE_CONTINUE;
+}
+
+static void
+free_sap_data (SapData * sap_data)
+{
+  g_ptr_array_unref (sap_data->sdps);
+  if (sap_data->sock)
+    g_object_unref (sap_data->sock);
+  g_free (sap_data);
+}
+
+static SapData *
+send_announcements (GError ** err)
+{
+  SapData *res = g_new0 (SapData, 1);
+  GSocketAddress *src_address;
+  GSocketAddress *dst_address;
+
+  res->sdps = g_ptr_array_new_with_free_func (g_free);
+
+  src_address = g_inet_socket_address_new_from_string ("0.0.0.0", 0);
+  dst_address =
+      g_inet_socket_address_new_from_string (DEFAULT_SAP_ADDRESS,
+      DEFAULT_SAP_PORT);
+
+  if (!(res->sock =
+          g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_DATAGRAM,
+              G_SOCKET_PROTOCOL_UDP, err)))
+    goto fail;
+  if (!g_socket_bind (res->sock, src_address, TRUE, err))
+    goto fail;
+  if (!g_socket_connect (res->sock, dst_address, NULL, err))
+    goto fail;
+
+  res->msg_id_hash = g_random_int ();
+
+  g_timeout_add_seconds (SAP_INTERVAL_SECONDS, (GSourceFunc) send_sap_cb, res);
+
+done:
+  g_object_unref (src_address);
+  g_object_unref (dst_address);
+  return res;
+
+fail:
+  free_sap_data (res);
+  res = NULL;
+  goto done;
+}
+
+static gboolean
+add_announcement (SapData * sap_data, GstRTSPServer * server,
+    const gchar * session_name)
+{
+  GstSDPMessage msg = { 0, };
+  gboolean ret = FALSE;
+  gchar *sess_id = NULL;
+  gchar *address = NULL;
+  gchar *uri = NULL;
+
+  if (gst_sdp_message_init (&msg) != GST_SDP_OK)
+    goto done;
+
+  address = gst_rtsp_server_get_address (server);
+  uri =
+      g_strdup_printf ("rtsp://%s:%d/%s", address,
+      gst_rtsp_server_get_bound_port (server), session_name);
+
+  if (gst_sdp_message_set_uri (&msg, uri) != GST_SDP_OK)
+    goto done;
+
+  if (gst_sdp_message_set_session_name (&msg, session_name) != GST_SDP_OK)
+    goto done;
+
+  sess_id = g_strdup_printf ("%u", g_random_int ());
+  if (gst_sdp_message_set_origin (&msg, "-", sess_id, "1", "IN", "IP4",
+          DEFAULT_SAP_ADDRESS) != GST_SDP_OK)
+    goto done;
+
+  g_ptr_array_add (sap_data->sdps, gst_sdp_message_as_text (&msg));
+
+  gst_sdp_message_uninit (&msg);
+
+  ret = TRUE;
+
+done:
+  g_free (uri);
+  g_free (sess_id);
+  g_free (address);
+  return ret;
+}
+
+static gchar *
+get_socket_address (GSocket * sock)
+{
+  GSocketAddress *saddr = g_socket_get_local_address (sock, NULL);
+  GInetAddress *iaddr =
+      g_inet_socket_address_get_address ((GInetSocketAddress *) saddr);
+  gchar *res = g_inet_address_to_string (iaddr);
+
+  g_object_unref (saddr);
+
+  return res;
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -850,6 +1017,9 @@ main (int argc, char *argv[])
   GstRTSPServer *server;
   GstRTSPMountPoints *mounts;
   GstRTSPMediaFactory *factory;
+  SapData *sap_data;
+  GError *err = NULL;
+  gchar *address;
 
   gst_init (&argc, &argv);
 
@@ -862,23 +1032,38 @@ main (int argc, char *argv[])
   if (!sanity_check ())
     return -1;
 
+  if (!(sap_data = send_announcements (&err))) {
+    g_error_free (err);
+    return -1;
+  }
+
   folder = g_strdup (argv[1]);
 
   loop = g_main_loop_new (NULL, FALSE);
 
   server = gst_rtsp_server_new ();
+
+  address = get_socket_address (sap_data->sock);
+  gst_rtsp_server_set_address (server, address);
+  g_free (address);
+
   mounts = gst_rtsp_server_get_mount_points (server);
   factory = g_object_new (TEST_TYPE_RTSP_MEDIA_FACTORY, NULL);
   gst_rtsp_media_factory_set_shared (factory, TRUE);
-  g_signal_connect (factory, "media-constructed", G_CALLBACK (media_constructed_cb), NULL);
+  g_signal_connect (factory, "media-constructed",
+      G_CALLBACK (media_constructed_cb), NULL);
   gst_rtsp_mount_points_add_factory (mounts, "/test", factory);
   g_object_unref (mounts);
+
   gst_rtsp_server_attach (server, NULL);
 
+  if (!add_announcement (sap_data, server, "test"))
+    return -1;
+
   /* start serving */
-  g_print ("ready to serve at rtsp://127.0.0.1:8554/test\n");
   g_main_loop_run (loop);
 
+  free_sap_data (sap_data);
   g_free (folder);
 
   return 0;
