@@ -79,7 +79,7 @@ message (GstBus * bus, GstMessage * message, gpointer user_data)
       g_free (debug);
       g_free (name);
 
-      gst_bus_remove_watch (GST_ELEMENT_BUS (ctx->pipe));
+      gst_bus_remove_signal_watch (GST_ELEMENT_BUS (ctx->pipe));
       gst_element_set_state (ctx->pipe, GST_STATE_NULL);
       gst_object_unref (ctx->pipe);
       ctx->received_samples_event = FALSE;
