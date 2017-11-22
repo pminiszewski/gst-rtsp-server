@@ -302,13 +302,13 @@ sap_cb (GIOChannel * io, GIOCondition condition, gpointer udata)
   const gchar *session_name;
   const gchar *uri;
 
-  if (ctx->pipe)
-    return TRUE;
-
   if (recv_sap (ctx, &sdp, &goodbye) < 0)
     goto done;
 
   ret = TRUE;
+
+  if (ctx->pipe)
+    goto done;
 
   if (gst_sdp_message_parse_buffer ((guint8 *) sdp, strlen (sdp),
           &msg) != GST_SDP_OK) {
