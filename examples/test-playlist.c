@@ -38,9 +38,6 @@ static gchar *folder = NULL;
 #define CLIP_DESC \
 "uridecodebin uri=%s expose-all-streams=false caps=audio/x-raw ! audioconvert ! audioresample"
 
-#define LIVE_DESC \
-"autoaudiosrc ! audioconvert ! audioresample"
-
 #define ENCODER "opusenc bitrate=192000 send-samples-events=true"
 
 #define PARSER "opusparse"
@@ -258,7 +255,6 @@ struct _TestSequencer
   GstElement *meta_payloader;
   GstElement *mixer;
   GstPad *songs_pad;
-  GstPad *live_pad;
   GList *uris;
   GList *next_uri;
   gulong sound_probeid;
@@ -270,7 +266,6 @@ struct _TestSequencer
 
   guint8 test_data;
   guint64 sample_offset;
-  gboolean was_playing_before_live;
 };
 
 G_DEFINE_TYPE (TestSequencer, test_sequencer, GST_TYPE_BIN);
@@ -500,32 +495,6 @@ add_meta_cb (GstPad * pad, GstPadProbeInfo * info, gpointer udata)
 }
 
 static void
-set_live_volume (TestSequencer *self, gdouble volume)
-{
-  if (self->live_pad)
-    g_object_set (self->live_pad, "volume", volume, NULL);
-}
-
-static void
-link_live_source (TestSequencer *self)
-{
-  GError *error = NULL;
-  GstElement *live_src = gst_parse_bin_from_description (LIVE_DESC, TRUE, &error);
-  GstPad *srcpad;
-
-  g_assert_no_error (error);
-  gst_bin_add (GST_BIN (self), live_src);
-  srcpad = gst_element_get_static_pad (live_src, "src");
-  g_assert (srcpad);
-
-  self->live_pad = gst_element_get_request_pad (self->mixer, "sink_%u");
-  gst_pad_link (srcpad, self->live_pad);
-  gst_object_unref (srcpad);
-  gst_object_unref (self->live_pad);
-  set_live_volume (self, 0.0);
-}
-
-static void
 test_sequencer_constructed (GObject * object)
 {
   TestSequencer *self = TEST_SEQUENCER (object);
@@ -601,8 +570,6 @@ test_sequencer_constructed (GObject * object)
   gst_object_unref (self->songs_pad);
 
   gst_element_link_many (self->mixer, asplit, capsfilter, enc, NULL);
-
-  link_live_source (self);
 
   gst_bin_sync_children_states (GST_BIN (self));
 }
@@ -712,28 +679,6 @@ test_sequencer_play (TestSequencer * self)
   }
 }
 
-static void
-test_sequencer_set_live (TestSequencer *self)
-{
-  if (!self->sound_probeid) {
-    test_sequencer_pause (self);
-    self->was_playing_before_live = TRUE;
-  }
-
-  set_live_volume (self, 1.0);
-}
-
-static void
-test_sequencer_unset_live (TestSequencer *self)
-{
-  if (self->was_playing_before_live)
-    test_sequencer_play (self);
-
-  self->was_playing_before_live = FALSE;
-
-  set_live_volume (self, 0.0);
-}
-
 /* Custom RTSPMediaFactory subclass */
 
 #define TEST_TYPE_RTSP_MEDIA_FACTORY      (test_rtsp_media_factory_get_type ())
@@ -781,8 +726,6 @@ io_callback (GIOChannel * io, GIOCondition condition, gpointer udata)
         g_print ("prev: play previous song\n");
         g_print ("pause: stop playback\n");
         g_print ("play: resume playback\n");
-        g_print ("live on: switch live source on\n");
-        g_print ("live off: switch live source off\n");
       } else if (!g_strcmp0 (line, "next\n")) {
         test_sequencer_next (sequencer);
       } else if (!g_strcmp0 (line, "prev\n")) {
@@ -791,10 +734,6 @@ io_callback (GIOChannel * io, GIOCondition condition, gpointer udata)
         test_sequencer_pause (sequencer);
       } else if (!g_strcmp0 (line, "play\n")) {
         test_sequencer_play (sequencer);
-      } else if (!g_strcmp0 (line, "live on\n")) {
-        test_sequencer_set_live (sequencer);
-      } else if (!g_strcmp0 (line, "live off\n")) {
-        test_sequencer_unset_live (sequencer);
       } else if (g_strcmp0 (line, "\n")) {
         g_print ("Unknown command, type help to list available commands\n");
       }
