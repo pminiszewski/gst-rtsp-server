@@ -38,6 +38,9 @@ static gchar *folder = NULL;
 #define CLIP_DESC \
 "uridecodebin uri=%s expose-all-streams=false caps=audio/x-raw ! audioconvert ! audioresample"
 
+#define LIVE_DESC \
+"autoaudiosrc ! audioconvert ! audioresample"
+
 #define ENCODER "opusenc bitrate=192000 send-samples-events=true"
 
 #define PARSER "opusparse"
@@ -62,7 +65,8 @@ G_DECLARE_FINAL_TYPE (TestClip, test_clip, TEST, CLIP, GstBin);
 enum
 {
   PROP_CLIP_0,
-  PROP_CLIP_URI
+  PROP_CLIP_URI,
+  PROP_LIVE
 };
 
 enum
@@ -77,6 +81,7 @@ struct _TestClip
 {
   GstBin parent;
   gchar *uri;
+  gboolean live;
   GstPad *srcpad;
   gint emit_done;
 };
@@ -152,6 +157,9 @@ test_clip_set_property (GObject * object, guint propid,
       g_free (self->uri);
       self->uri = g_value_dup_string (value);
       break;
+    case PROP_LIVE:
+      self->live = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, propid, pspec);
   }
@@ -175,9 +183,13 @@ test_clip_constructed (GObject * object)
   GError *error = NULL;
   GstPad *decodebin_srcpad;
 
-  g_assert (self->uri);
+  g_assert (self->uri || self->live);
 
-  bin_desc = g_strdup_printf (CLIP_DESC, self->uri);
+  if (self->live)
+    bin_desc = g_strdup (LIVE_DESC);
+  else
+    bin_desc = g_strdup_printf (CLIP_DESC, self->uri);
+
   decodebin = gst_parse_bin_from_description (bin_desc, FALSE, &error);
   g_free (bin_desc);
 
@@ -213,6 +225,10 @@ test_clip_class_init (TestClipClass * test_klass)
   g_object_class_install_property (gobject_class, PROP_CLIP_URI,
       g_param_spec_string ("uri", "URI",
           "URI of the clip to play back", NULL,
+          G_PARAM_CONSTRUCT_ONLY | G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_LIVE,
+      g_param_spec_boolean ("live", "live",
+          "Whether the clip will use the live bin", FALSE,
           G_PARAM_CONSTRUCT_ONLY | G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS));
   gobject_class->finalize = test_clip_finalize;
   gobject_class->constructed = test_clip_constructed;
@@ -255,6 +271,7 @@ struct _TestSequencer
   GstElement *meta_payloader;
   GstElement *mixer;
   GstPad *songs_pad;
+  GstPad *live_pad;
   GList *uris;
   GList *next_uri;
   gulong sound_probeid;
@@ -266,11 +283,12 @@ struct _TestSequencer
 
   guint8 test_data;
   guint64 sample_offset;
+  gboolean live;
 };
 
 G_DEFINE_TYPE (TestSequencer, test_sequencer, GST_TYPE_BIN);
 
-static void queue_uri (TestSequencer * self);
+static void queue_next_clip (TestSequencer * self);
 
 static void
 test_sequencer_set_property (GObject * object, guint propid,
@@ -400,40 +418,51 @@ clip_done_cb (TestClip * clip, gboolean stopped, TestSequencer * self)
   if (!stopped)
     test_sequencer_next_uri (self);
 
-  queue_uri (self);
+  queue_next_clip (self);
 
   gst_pad_unlink (clip_srcpad, peer);
   gst_object_unref (clip_srcpad);
 
   if (!self->sound_probeid) {
-    gst_element_release_request_pad (self->concat, peer);
-    gst_object_unref (peer);
+    if (!clip->live) {
+      gst_element_release_request_pad (self->concat, peer);
+      gst_object_unref (peer);
+    }
     g_idle_add ((GSourceFunc) remove_clip, clip);
   } else {
-    g_queue_push_tail (self->pads_to_release, peer);
+    if (!clip->live)
+      g_queue_push_tail (self->pads_to_release, peer);
     g_queue_push_tail (self->clips_to_remove, clip);
   }
 
 }
 
 static void
-queue_uri (TestSequencer * self)
+queue_next_clip (TestSequencer * self)
 {
-  gchar *uri;
-  GstPad *concat_sinkpad, *clip_srcpad;
+  GstPad *clip_srcpad;
 
-  uri = self->next_uri->data;
+  if (self->live) {
+    GST_INFO_OBJECT (self, "We're doing it live!");
+    self->current_clip = g_object_new (TEST_TYPE_CLIP, "live", self->live, NULL);
+  } else {
+    GST_INFO_OBJECT (self, "Queuing %s", (gchar *) self->next_uri->data);
+    self->current_clip = g_object_new (TEST_TYPE_CLIP, "uri", self->next_uri->data, NULL);
+  }
 
-  GST_INFO_OBJECT (self, "Queuing %s", uri);
-
-  self->current_clip = g_object_new (TEST_TYPE_CLIP, "uri", uri, NULL);
   gst_bin_add (GST_BIN (self), GST_ELEMENT (self->current_clip));
 
   clip_srcpad =
       gst_element_get_static_pad (GST_ELEMENT (self->current_clip), "src");
-  concat_sinkpad = gst_element_get_request_pad (self->concat, "sink_%u");
-  gst_pad_link (clip_srcpad, concat_sinkpad);
-  gst_object_unref (concat_sinkpad);
+
+  if (self->live) {
+    gst_pad_link (clip_srcpad, self->live_pad);
+  } else {
+    GstPad *concat_sinkpad = gst_element_get_request_pad (self->concat, "sink_%u");
+    gst_pad_link (clip_srcpad, concat_sinkpad);
+    gst_object_unref (concat_sinkpad);
+  }
+
   gst_object_unref (clip_srcpad);
 
   g_signal_connect (self->current_clip, "done", G_CALLBACK (clip_done_cb),
@@ -451,7 +480,7 @@ test_sequencer_start (TestSequencer * self)
 
   self->next_uri = self->uris;
 
-  queue_uri (self);
+  queue_next_clip (self);
 
   ret = TRUE;
 
@@ -569,6 +598,9 @@ test_sequencer_constructed (GObject * object)
   gst_object_unref (self->concat_srcpad);
   gst_object_unref (self->songs_pad);
 
+  self->live_pad = gst_element_get_request_pad (self->mixer, "sink_%u");
+  gst_object_unref (self->live_pad);
+
   gst_element_link_many (self->mixer, asplit, capsfilter, enc, NULL);
 
   gst_bin_sync_children_states (GST_BIN (self));
@@ -613,18 +645,40 @@ print_current (TestSequencer * self)
 static void
 test_sequencer_previous (TestSequencer * self)
 {
-  test_sequencer_previous_uri (self);
-  print_current (self);
-  test_clip_stop (self->current_clip);
+  if (!self->live) {
+    test_sequencer_previous_uri (self);
+    print_current (self);
+    test_clip_stop (self->current_clip);
+  }
 }
 
 static void
 test_sequencer_next (TestSequencer * self)
 {
   GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN (self), GST_DEBUG_GRAPH_SHOW_ALL, "next");
-  test_sequencer_next_uri (self);
-  print_current (self);
-  test_clip_stop (self->current_clip);
+  if (!self->live) {
+    test_sequencer_next_uri (self);
+    print_current (self);
+    test_clip_stop (self->current_clip);
+  }
+}
+
+static void
+test_sequencer_set_live (TestSequencer *self)
+{
+  if (!self->live) {
+    self->live = TRUE;
+    test_clip_stop (self->current_clip);
+  }
+}
+
+static void
+test_sequencer_unset_live (TestSequencer *self)
+{
+  if (self->live) {
+    self->live = FALSE;
+    test_clip_stop (self->current_clip);
+  }
 }
 
 static GstPadProbeReturn
@@ -636,6 +690,11 @@ pad_blocked_cb (GstPad * pad, GstPadProbeInfo * info, gpointer udata)
 static void
 test_sequencer_pause (TestSequencer * self)
 {
+  if (self->live) {
+    g_print ("Can't pause live\n");
+    return;
+  }
+
   if (self->sound_probeid) {
     g_print ("Already paused\n");
     return;
@@ -654,6 +713,9 @@ static void
 test_sequencer_play (TestSequencer * self)
 {
   gint64 mix_pos;
+
+  if (self->live)
+    return;
 
   if (!self->sound_probeid) {
     g_print ("Already playing\n");
@@ -726,6 +788,8 @@ io_callback (GIOChannel * io, GIOCondition condition, gpointer udata)
         g_print ("prev: play previous song\n");
         g_print ("pause: stop playback\n");
         g_print ("play: resume playback\n");
+        g_print ("live on: switch to live\n");
+        g_print ("live off: switch back to playlist\n");
       } else if (!g_strcmp0 (line, "next\n")) {
         test_sequencer_next (sequencer);
       } else if (!g_strcmp0 (line, "prev\n")) {
@@ -734,6 +798,10 @@ io_callback (GIOChannel * io, GIOCondition condition, gpointer udata)
         test_sequencer_pause (sequencer);
       } else if (!g_strcmp0 (line, "play\n")) {
         test_sequencer_play (sequencer);
+      } else if (!g_strcmp0 (line, "live on\n")) {
+        test_sequencer_set_live (sequencer);
+      } else if (!g_strcmp0 (line, "live off\n")) {
+        test_sequencer_unset_live (sequencer);
       } else if (g_strcmp0 (line, "\n")) {
         g_print ("Unknown command, type help to list available commands\n");
       }
