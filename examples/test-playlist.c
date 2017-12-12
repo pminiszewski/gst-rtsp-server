@@ -424,14 +424,15 @@ clip_done_cb (TestClip * clip, gboolean stopped, TestSequencer * self)
   gst_object_unref (clip_srcpad);
 
   if (!self->sound_probeid) {
-    if (!clip->live) {
+    if (!clip->live)
       gst_element_release_request_pad (self->concat, peer);
-      gst_object_unref (peer);
-    }
+    gst_object_unref (peer);
     g_idle_add ((GSourceFunc) remove_clip, clip);
   } else {
     if (!clip->live)
       g_queue_push_tail (self->pads_to_release, peer);
+    else
+      gst_object_unref (peer);
     g_queue_push_tail (self->clips_to_remove, clip);
   }
 
