@@ -377,6 +377,7 @@ remove_clip (TestClip * clip)
   TestSequencer *self;
   GstStateChangeReturn res;
 
+  gst_element_set_locked_state (GST_ELEMENT (clip), TRUE);
   res = gst_element_set_state (GST_ELEMENT (clip), GST_STATE_NULL);
 
   /* Will eventually work, let's not dispose just yet */
