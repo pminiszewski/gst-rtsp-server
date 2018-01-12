@@ -57,6 +57,8 @@ static gchar *folder = NULL;
 #define SAP_INTERVAL_SECONDS 1
 #define MIME_TYPE "application/sdp"
 
+#define LATENCY 40
+
 /* Audio clip */
 
 #define TEST_TYPE_CLIP (test_clip_get_type ())
@@ -972,157 +974,6 @@ done:
   return ret;
 }
 
-typedef struct
-{
-  GSocket *sock;
-  GPtrArray *sdps;
-  guint16 msg_id_hash;
-} SapData;
-
-int
-send_sap (GSocket * sock, gchar * sdp, guint16 msg_id_hash, gboolean goodbye)
-{
-  guint32 header;
-  GOutputVector iov[4];
-  GSocketAddress *saddr = g_socket_get_local_address (sock, NULL);
-  GInetAddress *iaddr =
-      g_inet_socket_address_get_address ((GInetSocketAddress *) saddr);
-
-  header = g_htonl (((guint32) 1 << 29) |
-      (goodbye ? (guint32) 1 << 26 : 0) | (msg_id_hash));
-
-  iov[0].buffer = &header;
-  iov[0].size = sizeof (header);
-
-  iov[1].buffer = (void *) g_inet_address_to_bytes (iaddr);
-  iov[1].size = 4;
-
-  iov[2].buffer = (char *) MIME_TYPE;
-  iov[2].size = sizeof (MIME_TYPE);
-
-  iov[3].buffer = sdp;
-  iov[3].size = strlen (sdp);
-
-  g_object_unref (saddr);
-
-  return g_socket_send_message (sock, NULL, iov, 4, NULL, 0, 0, NULL, NULL);
-}
-
-static gboolean
-send_sap_cb (SapData * sap_data)
-{
-  guint i;
-
-  for (i = 0; i < sap_data->sdps->len; i++) {
-    send_sap (sap_data->sock, g_ptr_array_index (sap_data->sdps, i),
-        sap_data->msg_id_hash, FALSE);
-  }
-
-  return G_SOURCE_CONTINUE;
-}
-
-static void
-free_sap_data (SapData * sap_data)
-{
-  g_ptr_array_unref (sap_data->sdps);
-  if (sap_data->sock)
-    g_object_unref (sap_data->sock);
-  g_free (sap_data);
-}
-
-static SapData *
-send_announcements (GError ** err)
-{
-  SapData *res = g_new0 (SapData, 1);
-  GSocketAddress *src_address;
-  GSocketAddress *dst_address;
-
-  res->sdps = g_ptr_array_new_with_free_func (g_free);
-
-  src_address = g_inet_socket_address_new_from_string ("0.0.0.0", 0);
-  dst_address =
-      g_inet_socket_address_new_from_string (DEFAULT_SAP_ADDRESS,
-      DEFAULT_SAP_PORT);
-
-  if (!(res->sock =
-          g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_DATAGRAM,
-              G_SOCKET_PROTOCOL_UDP, err)))
-    goto fail;
-  if (!g_socket_bind (res->sock, src_address, TRUE, err))
-    goto fail;
-  if (!g_socket_connect (res->sock, dst_address, NULL, err))
-    goto fail;
-
-  res->msg_id_hash = g_random_int ();
-
-  g_timeout_add_seconds (SAP_INTERVAL_SECONDS, (GSourceFunc) send_sap_cb, res);
-
-done:
-  g_object_unref (src_address);
-  g_object_unref (dst_address);
-  return res;
-
-fail:
-  free_sap_data (res);
-  res = NULL;
-  goto done;
-}
-
-static gboolean
-add_announcement (SapData * sap_data, GstRTSPServer * server,
-    const gchar * session_name)
-{
-  GstSDPMessage msg = { 0, };
-  gboolean ret = FALSE;
-  gchar *sess_id = NULL;
-  gchar *address = NULL;
-  gchar *uri = NULL;
-
-  if (gst_sdp_message_init (&msg) != GST_SDP_OK)
-    goto done;
-
-  address = gst_rtsp_server_get_address (server);
-  uri =
-      g_strdup_printf ("rtsp://%s:%d/%s", address,
-      gst_rtsp_server_get_bound_port (server), session_name);
-
-  if (gst_sdp_message_set_uri (&msg, uri) != GST_SDP_OK)
-    goto done;
-
-  if (gst_sdp_message_set_session_name (&msg, session_name) != GST_SDP_OK)
-    goto done;
-
-  sess_id = g_strdup_printf ("%u", g_random_int ());
-  if (gst_sdp_message_set_origin (&msg, "-", sess_id, "1", "IN", "IP4",
-          DEFAULT_SAP_ADDRESS) != GST_SDP_OK)
-    goto done;
-
-  g_ptr_array_add (sap_data->sdps, gst_sdp_message_as_text (&msg));
-
-  gst_sdp_message_uninit (&msg);
-
-  ret = TRUE;
-
-done:
-  g_free (uri);
-  g_free (sess_id);
-  g_free (address);
-  return ret;
-}
-
-static gchar *
-get_socket_address (GSocket * sock)
-{
-  GSocketAddress *saddr = g_socket_get_local_address (sock, NULL);
-  GInetAddress *iaddr =
-      g_inet_socket_address_get_address ((GInetSocketAddress *) saddr);
-  gchar *res = g_inet_address_to_string (iaddr);
-
-  g_object_unref (saddr);
-
-  return res;
-}
-
 int
 main (int argc, char *argv[])
 {
@@ -1130,9 +981,6 @@ main (int argc, char *argv[])
   GstRTSPServer *server;
   GstRTSPMountPoints *mounts;
   GstRTSPMediaFactory *factory;
-  SapData *sap_data;
-  GError *err = NULL;
-  gchar *address;
 
   gst_init (&argc, &argv);
 
@@ -1145,20 +993,11 @@ main (int argc, char *argv[])
   if (!sanity_check ())
     return -1;
 
-  if (!(sap_data = send_announcements (&err))) {
-    g_error_free (err);
-    return -1;
-  }
-
   folder = g_strdup (argv[1]);
 
   loop = g_main_loop_new (NULL, FALSE);
 
   server = gst_rtsp_server_new ();
-
-  address = get_socket_address (sap_data->sock);
-  gst_rtsp_server_set_address (server, address);
-  g_free (address);
 
   mounts = gst_rtsp_server_get_mount_points (server);
 
@@ -1171,23 +1010,22 @@ main (int argc, char *argv[])
 
   /* Record mount point */
   factory = g_object_new (TEST_TYPE_RECORDER_FACTORY, NULL);
-  gst_rtsp_media_factory_set_latency (factory, 40);
+  gst_rtsp_media_factory_set_latency (factory, LATENCY);
   gst_rtsp_mount_points_add_factory (mounts, "/test-input", factory);
 
   g_object_unref (mounts);
 
   gst_rtsp_server_attach (server, NULL);
 
-  g_print ("Expecting DJ input on rtsp://%s:%d/test-input\n", gst_rtsp_server_get_address (server),
+  g_print ("Accepting clients on rtsp://%s:%d/test\n", gst_rtsp_server_get_address (server),
       gst_rtsp_server_get_bound_port (server));
 
-  if (!add_announcement (sap_data, server, "test"))
-    return -1;
+  g_print ("Expecting DJ input on rtsp://%s:%d/test-input\n", gst_rtsp_server_get_address (server),
+      gst_rtsp_server_get_bound_port (server));
 
   /* start serving */
   g_main_loop_run (loop);
 
-  free_sap_data (sap_data);
   g_free (folder);
 
   return 0;
