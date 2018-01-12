@@ -39,7 +39,7 @@ static gchar *folder = NULL;
 "uridecodebin uri=%s expose-all-streams=false caps=audio/x-raw ! audioconvert ! audioresample"
 
 #define LIVE_DESC \
-"autoaudiosrc ! audioconvert ! audioresample"
+"interaudiosrc channel=%s ! audioconvert ! audioresample"
 
 #define ENCODER "opusenc bitrate=192000 send-samples-events=true"
 
@@ -66,7 +66,8 @@ enum
 {
   PROP_CLIP_0,
   PROP_CLIP_URI,
-  PROP_LIVE
+  PROP_LIVE,
+  PROP_CLIP_ROOM
 };
 
 enum
@@ -81,6 +82,7 @@ struct _TestClip
 {
   GstBin parent;
   gchar *uri;
+  gchar *room;
   gboolean live;
   GstPad *srcpad;
   gint emit_done;
@@ -157,6 +159,10 @@ test_clip_set_property (GObject * object, guint propid,
       g_free (self->uri);
       self->uri = g_value_dup_string (value);
       break;
+    case PROP_CLIP_ROOM:
+      g_free (self->room);
+      self->room = g_value_dup_string (value);
+      break;
     case PROP_LIVE:
       self->live = g_value_get_boolean (value);
       break;
@@ -170,7 +176,7 @@ test_clip_finalize (GObject * object)
 {
   TestClip *self = TEST_CLIP (object);
 
-  g_free (self->uri);
+  g_free (self->room);
   gst_object_unref (self->srcpad);
 }
 
@@ -185,10 +191,13 @@ test_clip_constructed (GObject * object)
 
   g_assert (self->uri || self->live);
 
-  if (self->live)
-    bin_desc = g_strdup (LIVE_DESC);
-  else
+  if (self->live) {
+    gchar *channel_name = g_strdup_printf ("%s-input", self->room);
+    bin_desc = g_strdup_printf (LIVE_DESC, channel_name);
+    g_free (channel_name);
+  } else {
     bin_desc = g_strdup_printf (CLIP_DESC, self->uri);
+  }
 
   decodebin = gst_parse_bin_from_description (bin_desc, FALSE, &error);
   g_free (bin_desc);
@@ -230,6 +239,10 @@ test_clip_class_init (TestClipClass * test_klass)
       g_param_spec_boolean ("live", "live",
           "Whether the clip will use the live bin", FALSE,
           G_PARAM_CONSTRUCT_ONLY | G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_CLIP_ROOM,
+      g_param_spec_string ("room", "Room",
+          "Room the clip is played back in", NULL,
+          G_PARAM_CONSTRUCT_ONLY | G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS));
   gobject_class->finalize = test_clip_finalize;
   gobject_class->constructed = test_clip_constructed;
 
@@ -260,13 +273,15 @@ G_DECLARE_FINAL_TYPE (TestSequencer, test_sequencer, TEST, SEQUENCER, GstBin);
 enum
 {
   PROP_SEQUENCER_0,
-  PROP_SEQUENCER_FOLDER
+  PROP_SEQUENCER_FOLDER,
+  PROP_SEQUENCER_ROOM
 };
 
 struct _TestSequencer
 {
   GstBin parent;
   gchar *folder;
+  gchar *room;
   GstElement *concat;
   GstElement *meta_payloader;
   GstElement *mixer;
@@ -301,6 +316,10 @@ test_sequencer_set_property (GObject * object, guint propid,
       g_free (self->folder);
       self->folder = g_value_dup_string (value);
       break;
+    case PROP_SEQUENCER_ROOM:
+      g_free (self->room);
+      self->room = g_value_dup_string (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, propid, pspec);
   }
@@ -311,6 +330,7 @@ test_sequencer_finalize (GObject * object)
 {
   TestSequencer *self = TEST_SEQUENCER (object);
 
+  g_free (self->room);
   g_free (self->folder);
   g_list_free_full (self->uris, g_free);
   g_queue_free (self->pads_to_release);
@@ -446,10 +466,10 @@ queue_next_clip (TestSequencer * self)
 
   if (self->live) {
     GST_INFO_OBJECT (self, "We're doing it live!");
-    self->current_clip = g_object_new (TEST_TYPE_CLIP, "live", self->live, NULL);
+    self->current_clip = g_object_new (TEST_TYPE_CLIP, "live", self->live, "room", self->room, NULL);
   } else {
     GST_INFO_OBJECT (self, "Queuing %s", (gchar *) self->next_uri->data);
-    self->current_clip = g_object_new (TEST_TYPE_CLIP, "uri", self->next_uri->data, NULL);
+    self->current_clip = g_object_new (TEST_TYPE_CLIP, "uri", self->next_uri->data, "room", self->room, NULL);
   }
 
   gst_bin_add (GST_BIN (self), GST_ELEMENT (self->current_clip));
@@ -619,6 +639,10 @@ test_sequencer_class_init (TestSequencerClass * test_klass)
       g_param_spec_string ("folder", "Folder",
           "Path to the songs folder", NULL,
           G_PARAM_CONSTRUCT_ONLY | G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_SEQUENCER_ROOM,
+      g_param_spec_string ("room", "Room",
+          "Name of the room", NULL,
+          G_PARAM_CONSTRUCT_ONLY | G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS));
   gobject_class->finalize = test_sequencer_finalize;
   gobject_class->constructed = test_sequencer_constructed;
   gstelement_class->change_state = test_sequencer_change_state;
@@ -743,7 +767,44 @@ test_sequencer_play (TestSequencer * self)
   }
 }
 
-/* Custom RTSPMediaFactory subclass */
+#define TEST_TYPE_RECORDER_FACTORY      (test_recorder_factory_get_type ())
+G_DECLARE_FINAL_TYPE (TestRecorderFactory, test_recorder_factory, TEST,
+    RECORDER_FACTORY, GstRTSPMediaFactory);
+
+struct _TestRecorderFactory
+{
+  GstRTSPMediaFactory parent;
+};
+
+G_DEFINE_TYPE (TestRecorderFactory, test_recorder_factory,
+    GST_TYPE_RTSP_MEDIA_FACTORY);
+
+static GstElement *
+create_recorder_element (GstRTSPMediaFactory * factory, const GstRTSPUrl * url)
+{
+  GstElement *res;
+  GError *error = NULL;
+  gchar *bin_desc = g_strdup_printf ("decodebin name=depay0 ! interaudiosink channel=%s", url->abspath);
+
+  res = gst_parse_launch_full (bin_desc, NULL, GST_PARSE_FLAG_NONE, &error);
+  g_free (bin_desc);
+
+  return GST_ELEMENT (res);
+}
+
+static void
+test_recorder_factory_class_init (TestRecorderFactoryClass * test_klass)
+{
+  GstRTSPMediaFactoryClass *klass = (GstRTSPMediaFactoryClass *) (test_klass);
+  klass->create_element = create_recorder_element;
+}
+
+static void
+test_recorder_factory_init (TestRecorderFactory * self)
+{
+  gst_rtsp_media_factory_set_transport_mode (GST_RTSP_MEDIA_FACTORY (self),
+      GST_RTSP_TRANSPORT_MODE_RECORD);
+}
 
 #define TEST_TYPE_SEQUENCER_FACTORY      (test_sequencer_factory_get_type ())
 G_DECLARE_FINAL_TYPE (TestSequencerFactory, test_sequencer_factory, TEST,
@@ -808,11 +869,11 @@ io_callback (GIOChannel * io, GIOCondition condition, gpointer udata)
 }
 
 static GstElement *
-create_element (GstRTSPMediaFactory * factory, const GstRTSPUrl * url)
+create_sequencer_element (GstRTSPMediaFactory * factory, const GstRTSPUrl * url)
 {
   GstElement *res;
 
-  res = g_object_new (TEST_TYPE_SEQUENCER, "folder", folder, NULL);
+  res = g_object_new (TEST_TYPE_SEQUENCER, "folder", folder, "room", url->abspath, NULL);
 
   return GST_ELEMENT (res);
 }
@@ -821,7 +882,7 @@ static void
 test_sequencer_factory_class_init (TestSequencerFactoryClass * test_klass)
 {
   GstRTSPMediaFactoryClass *klass = (GstRTSPMediaFactoryClass *) (test_klass);
-  klass->create_element = create_element;
+  klass->create_element = create_sequencer_element;
 }
 
 static void
@@ -1107,9 +1168,18 @@ main (int argc, char *argv[])
   g_signal_connect (factory, "media-constructed",
       G_CALLBACK (media_constructed_cb), NULL);
   gst_rtsp_mount_points_add_factory (mounts, "/test", factory);
+
+  /* Record mount point */
+  factory = g_object_new (TEST_TYPE_RECORDER_FACTORY, NULL);
+  gst_rtsp_media_factory_set_latency (factory, 40);
+  gst_rtsp_mount_points_add_factory (mounts, "/test-input", factory);
+
   g_object_unref (mounts);
 
   gst_rtsp_server_attach (server, NULL);
+
+  g_print ("Expecting DJ input on rtsp://%s:%d/test-input\n", gst_rtsp_server_get_address (server),
+      gst_rtsp_server_get_bound_port (server));
 
   if (!add_announcement (sap_data, server, "test"))
     return -1;
