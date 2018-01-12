@@ -745,16 +745,16 @@ test_sequencer_play (TestSequencer * self)
 
 /* Custom RTSPMediaFactory subclass */
 
-#define TEST_TYPE_RTSP_MEDIA_FACTORY      (test_rtsp_media_factory_get_type ())
-G_DECLARE_FINAL_TYPE (TestRTSPMediaFactory, test_rtsp_media_factory, TEST,
-    RTSP_MEDIA_FACTORY, GstRTSPMediaFactory);
+#define TEST_TYPE_SEQUENCER_FACTORY      (test_sequencer_factory_get_type ())
+G_DECLARE_FINAL_TYPE (TestSequencerFactory, test_sequencer_factory, TEST,
+    SEQUENCER_FACTORY, GstRTSPMediaFactory);
 
-struct _TestRTSPMediaFactory
+struct _TestSequencerFactory
 {
   GstRTSPMediaFactory parent;
 };
 
-G_DEFINE_TYPE (TestRTSPMediaFactory, test_rtsp_media_factory,
+G_DEFINE_TYPE (TestSequencerFactory, test_sequencer_factory,
     GST_TYPE_RTSP_MEDIA_FACTORY);
 
 static gboolean
@@ -818,14 +818,14 @@ create_element (GstRTSPMediaFactory * factory, const GstRTSPUrl * url)
 }
 
 static void
-test_rtsp_media_factory_class_init (TestRTSPMediaFactoryClass * test_klass)
+test_sequencer_factory_class_init (TestSequencerFactoryClass * test_klass)
 {
   GstRTSPMediaFactoryClass *klass = (GstRTSPMediaFactoryClass *) (test_klass);
   klass->create_element = create_element;
 }
 
 static void
-test_rtsp_media_factory_init (TestRTSPMediaFactory * self)
+test_sequencer_factory_init (TestSequencerFactory * self)
 {
 }
 
@@ -1100,7 +1100,9 @@ main (int argc, char *argv[])
   g_free (address);
 
   mounts = gst_rtsp_server_get_mount_points (server);
-  factory = g_object_new (TEST_TYPE_RTSP_MEDIA_FACTORY, NULL);
+
+  /* Playback mount point */
+  factory = g_object_new (TEST_TYPE_SEQUENCER_FACTORY, NULL);
   gst_rtsp_media_factory_set_shared (factory, TRUE);
   g_signal_connect (factory, "media-constructed",
       G_CALLBACK (media_constructed_cb), NULL);
