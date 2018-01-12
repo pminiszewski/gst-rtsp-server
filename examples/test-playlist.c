@@ -757,24 +757,6 @@ struct _TestRTSPMediaFactory
 G_DEFINE_TYPE (TestRTSPMediaFactory, test_rtsp_media_factory,
     GST_TYPE_RTSP_MEDIA_FACTORY);
 
-static gboolean pause_cb (TestSequencer * seq);
-
-static gboolean
-play_cb (TestSequencer * seq)
-{
-  test_sequencer_play (seq);
-  g_timeout_add_seconds (5, (GSourceFunc) pause_cb, seq);
-  return G_SOURCE_REMOVE;
-}
-
-static gboolean
-pause_cb (TestSequencer * seq)
-{
-  test_sequencer_pause (seq);
-  g_timeout_add_seconds (5, (GSourceFunc) play_cb, seq);
-  return G_SOURCE_REMOVE;
-}
-
 static gboolean
 io_callback (GIOChannel * io, GIOCondition condition, gpointer udata)
 {
