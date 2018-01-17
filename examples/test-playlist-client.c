@@ -38,7 +38,7 @@
 #define PLAYBACK_PIPELINE_DESC "rtspsrc name=src ! rpdepay ! rtpgstdepay ! opusdec ! " \
   "audiobuffersplit output-buffer-duration=512/48000 name=split ! autoaudiosink"
 
-#define DJ_PIPELINE_DESC "pulsesrc ! opusenc ! rtspclientsink location=%s latency=%d"
+#define DJ_PIPELINE_DESC "pulsesrc ! opusenc ! queue ! rtspclientsink location=%s latency=%d"
 
 #define FRAMES_PER_BLOCK 512
 
