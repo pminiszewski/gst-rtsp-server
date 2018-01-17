@@ -294,6 +294,7 @@ struct _TestSequencer
   gulong sound_probeid;
   GstPad *concat_srcpad;
   gint64 last_mix_pos;
+  gint64 live_offset;
   GQueue *pads_to_release;
   GQueue *clips_to_remove;
   TestClip *current_clip;
@@ -697,6 +698,9 @@ test_sequencer_set_live (TestSequencer *self)
   if (!self->live) {
     self->live = TRUE;
     test_clip_stop (self->current_clip);
+
+    gst_element_query_position (self->mixer, GST_FORMAT_TIME,
+        &self->last_mix_pos);
   }
 }
 
@@ -704,6 +708,14 @@ static void
 test_sequencer_unset_live (TestSequencer *self)
 {
   if (self->live) {
+    gint64 mix_pos;
+    GstEvent *segment_event =
+        gst_pad_get_sticky_event (self->songs_pad, GST_EVENT_SEGMENT, 0);
+
+    gst_element_query_position (self->mixer, GST_FORMAT_TIME, &mix_pos);
+    self->live_offset += mix_pos - self->last_mix_pos;
+    gst_pad_set_offset (self->songs_pad, self->live_offset);
+    gst_pad_send_event (self->songs_pad, segment_event);
     self->live = FALSE;
     test_clip_stop (self->current_clip);
   }
@@ -754,6 +766,7 @@ test_sequencer_play (TestSequencer * self)
   gst_element_query_position (self->mixer, GST_FORMAT_TIME, &mix_pos);
   GstEvent *segment_event =
       gst_pad_get_sticky_event (self->songs_pad, GST_EVENT_SEGMENT, 0);
+  self->live_offset += mix_pos - self->last_mix_pos;
   gst_pad_set_offset (self->songs_pad, mix_pos - self->last_mix_pos);
   gst_pad_send_event (self->songs_pad, segment_event);
   gst_pad_remove_probe (self->concat_srcpad, self->sound_probeid);
